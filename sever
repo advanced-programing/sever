@@ -1,0 +1,556 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+// caroserver.cpp : Defines the entry point for the console application.
+//
+
+#include "stdafx.h"
+#include <iostream>
+#include <winsock2.h>
+#include <fstream>
+#include <string.h>
+#include <stdlib.h>
+#define bound 15
+
+using namespace std;
+struct clients {
+	SOCKET sockID;
+	char nameID[30];
+	int roomID;
+	int quyen_danh;
+};
+clients myClients[64];
+int numClient = 0;
+
+
+class room {
+public:
+
+	int **map;
+	int A, B;
+	char nameA[30], nameB[30];
+	room() {
+		this->map = new int*[bound];
+		for (int i = 0; i < bound; i++) {
+			this->map[i] = new int[bound];
+			for (int j = 0; j < bound; j++) {
+				this->map[i][j] = -1;
+			}
+		}
+		this->A = -1;
+		this->B = -1;
+
+	}
+	void saveLogxy(int winner) {
+
+		fstream f("log.txt", ios::app);
+		if (!f) return;
+		if (winner == this->A) {
+			f << this->nameA << "(" << this->A << ")" << " vs "
+				<< this->nameB << "(" << this->B << ")" << " => win: " << this->nameA << endl;
+		}
+		else f << this->nameA << "(" << this->A << ")" << " vs "
+			<< this->nameB << "(" << this->B << ")" << " => win: " << this->nameB << endl;
+		for (int i = 0; i < bound; i++) {
+			for (int j = 0; j < bound; j++) {
+				f << this->map[i][j] << " ";
+			}
+			f << endl;
+		}
+		f.close();
+
+	}
+	void saveLogChat(char *buf) {
+
+		fstream f("log.txt", ios::app);
+		f << buf << endl;
+		f.close();
+
+	}
+	void reSet() {
+		for (int i = 0; i < bound; i++) {
+			for (int j = 0; j < bound; j++) {
+				this->map[i][j] = -1;
+			}
+		}
+		this->A = -1;
+		this->B = -1;
+	}
+	int registerMember(int client, char *name) {
+		if (this->A == -1) {
+			this->A = client;
+			sprintf(this->nameA, "%s", name);
+			return 1;// thanh cong
+		}
+		else if (this->B == -1) {
+			this->B = client;
+			sprintf(this->nameB, "%s", name);
+			return 2;// van choi bat dau
+		}
+
+		return 0;
+	}
+	void setMap(int i, int j, int key) {
+		this->map[i][j] = this->map[i][j] == -1 ? key : -1;
+		for (int tim = 0; tim < numClient; tim++) {
+			if (myClients[tim].sockID == (SOCKET)key) myClients[tim].quyen_danh = -1;
+		}
+	}
+
+	void displayMap() {
+		cout << "A: " << this->A << " vs B: " << this->B << endl;
+		for (int i = 0; i < bound; i++) {
+			for (int j = 0; j < bound; j++)
+				cout << this->map[i][j] << " ";
+			cout << endl;
+		}
+		cout << endl;
+	}
+	int check_left_to_right(int i, int j, int key) {
+		int boundary = j + 5;
+		if (boundary <= bound) {
+			for (int k = j; k < boundary; k++) {
+				if (this->map[i][k] != key) {
+					return 0;
+				}
+			}
+			return key;
+		}
+		else return 0;
+	}
+	int check_top_to_button(int i, int j, int key) {
+		int boundary = i + 5;
+		if (boundary <= bound) {
+			for (int k = i; k < boundary; k++) {
+				if (this->map[k][j] != key) return 0;
+			}
+			return key;
+		}
+		else return 0;
+	}
+	int check_left_diagonal_top_to_button(int i, int j, int key) {
+		int under_boundary = i + 5, right_boundary = j + 5;
+		if (right_boundary <= bound && under_boundary <= bound) {
+			for (int k = i, h = j; k < under_boundary, h < right_boundary; k++, h++)
+				if (this->map[k][h] != key) return 0;
+			return key;
+		}
+		else return 0;
+
+	}
+	int check_right_diagonal_top_to_button(int i, int j, int key) {
+		int under_boundary = i + 5, left_boundary = j - 4;
+		if (under_boundary <= bound && left_boundary >= 0) {
+			for (int k = i, h = j; k < under_boundary, h >= left_boundary; k++, h--)
+				if (this->map[k][h] != key) return 0;
+			return key;
+		}
+		else return 0;
+
+	}
+	void move_left(int i, int j, int key, int &aft_i, int &aft_j) {
+		/*di chuyen toi da ve phia trai
+		den khi gap bien (j = 0)
+		hoac quan doi phuong ( khac key ) thi dung*/
+
+		for (int k = j; k >= 0; k--) {
+			if (this->map[i][k] != key) {
+				aft_i = i;
+				aft_j = k + 1;
+				return;
+			}
+		}
+		// di chuyen den bien
+		aft_i = i;
+		aft_j = 0;
+
+	}
+	void move_top(int i, int j, int key, int &aft_i, int &aft_j) {
+		for (int k = i; k >= 0; k--) {
+			if (this->map[k][j] != key) {
+				aft_j = j;
+				aft_i = k + 1;
+				return;
+			}
+		}
+		aft_j = j;
+		aft_i = 0;
+
+	}
+	void move_left_diagonal(int cur_i, int cur_j, int key, int &aft_i, int &aft_j) {
+		//4 1
+		int x = cur_j, y = cur_i;
+
+		for (x, y; (x >= 0 && y >= 0); x--, y--) {
+			if (this->map[y][x] != key) {
+				aft_i = y + 1;
+				aft_j = x + 1;
+				return;
+			}
+		}
+		aft_i = y + 1;
+		aft_j = x + 1;
+	}
+	void move_right_diagonal(int cur_i, int cur_j, int key, int &aft_i, int &aft_j) {
+		int i = cur_i, j = cur_j;
+		for (i, j; (j <= (bound - 1) && i >= 0); j++, i--) {
+			if (this->map[i][j] != key) {
+				aft_i = i + 1;
+				aft_j = j - 1;
+				return;
+			}
+		}
+
+		aft_i = i + 1;
+		aft_j = j - 1;
+		return;
+
+	}
+	int whowin(int i, int j, int key) {
+	
+		int aft_i, aft_j;
+		int check;
+
+		move_left(i, j, key, aft_i, aft_j);
+
+		check = check_left_to_right(aft_i, aft_j, key);
+
+		if (check == key) {
+			// key thang
+			return key;
+		}
+
+
+		move_top(i, j, key, aft_i, aft_j);
+
+		check = check_top_to_button(aft_i, aft_j, key);
+
+		if (check == key) {
+			// key thang
+
+			return key;
+		}
+
+		move_left_diagonal(i, j, key, aft_i, aft_j);
+
+		check = check_left_diagonal_top_to_button(aft_i, aft_j, key);
+
+		if (check == key) {
+			// key thang
+
+			return key;
+		}
+
+		move_right_diagonal(i, j, key, aft_i, aft_j);
+
+		check = check_right_diagonal_top_to_button(aft_i, aft_j, key);
+
+		if (check == key) {
+			//key thang
+
+			return key;
+		}
+
+		return 0;
+
+	}
+
+};
+
+room *myRoom[10];
+
+int login(int index,char *id, char *pw)
+{	// kiem tra xem nick dang hoat dong ko 
+	for (int i = 0; i < numClient; i++) {
+		if (!strcmp(id, myClients[i].nameID) ) return 0;
+	}
+	// kiem tra id|pw neu thanh cong tra ve 1, nguoc lai tra ve 0
+	ifstream ifs("user.txt");
+	if (!ifs) return 0;
+	char line[256], fid[30], fpw[30];
+	while (!ifs.eof()) {
+		ifs.getline(line, 256);
+		sscanf(line, "%s %s", fid, fpw);
+		if (!strcmp(id, fid) && !strcmp(pw, fpw)) {
+			// correct
+			ifs.close();
+			strcpy(myClients[index].nameID, id);
+			return 1;
+		}
+	}
+	// incorrect
+	ifs.close();
+	return 0;
+}
+int registerAccount(char *id, char *pw)
+{
+	// kiem tra id da ton tai trong database chua
+	// thanh cong tra ve 1 nguoc lai tra ve 0
+	fstream f;
+	f.open("user.txt", ios::in);
+	if (!f) return 0;
+
+	char line[50], fid[30];
+	while (!f.eof()) {
+		f.getline(line, 50);
+		sscanf(line, "%s ", fid);
+		if (!strcmp(id, fid)) {
+			// incorrect
+			f.close();
+			return 0;
+		}
+	}
+	f.close();
+	f.open("user.txt", ios::app);
+	f << endl << id << " " << pw;
+	f.close();
+	return 1;
+}
+void Exit_program(int index) {
+	int i = index;
+	for (i ; i < numClient-1; i++) {
+		myClients[i] = myClients[i + 1];
+	}
+	numClient--;
+
+}
+// tao room va trien khai room
+
+void ProcessClient(int index, char *buf)
+{
+	char cmd[10];
+	sscanf(buf, "%s ", cmd);
+	if (!strcmp(cmd, "L"))
+	{
+		// goi tin dang nhap
+		char id[30], pw[30];
+		sscanf(buf, "%s %s %s", cmd, id, pw);
+		if (login(index,id, pw))
+		{
+			// dang nhap thanh cong
+			send(myClients[index].sockID, "L_OK\n", 5, 0);
+			sscanf(id, "%s", myClients[index].nameID);
+			cout << myClients[index].nameID << " login" << endl;
+		}
+		else
+		{
+			send(myClients[index].sockID, "L_ER\n", 5, 0);
+		}
+
+	}
+	else if (!strcmp(cmd, "R"))
+	{
+		char id[30], pw[30];
+		sscanf(buf, "%s %s %s", cmd, id, pw);
+		if (registerAccount(id, pw))
+		{
+			// dang ky thanh cong
+			send(myClients[index].sockID, "R_OK\n", 5, 0);
+		}
+		else
+		{
+			// dang ky khong thanh cong
+			send(myClients[index].sockID, "R_ER\n", 5, 0);
+		}
+	}
+	else if (!strcmp(cmd, "P"))
+	{
+
+		// chon room va xu ly van choi
+		// P_[ID]_[room]_register
+		// P_[ID]_[room]_[x]_[y]
+		// P_[ID]_[room]_[exit] 
+
+		char nameID[30], P[3], cmd[20], rID[5];
+
+		sscanf(buf, "%s %s %s %s", P, nameID, rID, cmd);
+		int roomID = atoi(rID);
+		if (!strcmp(cmd, "register"))
+		{
+			// P_[ID]_[room]_register
+			// dang ky vao room ID	
+			int key = myRoom[roomID]->registerMember(myClients[index].sockID, nameID);
+			if (key == 1)
+			{
+				//dang ky thanh cong
+
+				send(myClients[index].sockID, "RR_OK\n", 6, 0);
+			}
+			else if (key == 2) {
+				// room is full, start game
+				char play[50], wait[50];
+				int rivalID = (myRoom[roomID]->A == (int)myClients[index].sockID) ? myRoom[roomID]->B : myRoom[roomID]->A;
+				char *firstplayer_name = (myRoom[roomID]->A == (int)myClients[index].sockID) ? myRoom[roomID]->nameB : myRoom[roomID]->nameA;
+				sprintf(play, "play %s\n", nameID);
+				sprintf(wait, "wait %s\n", firstplayer_name);
+				send(myClients[index].sockID, "RR_OK\n", 6, 0);
+				send(myClients[index].sockID, wait, strlen(wait), 0);
+				send((SOCKET)rivalID, play, strlen(play), 0);
+				for (int tim = 0; tim < numClient; tim++) {
+					if (myClients[tim].sockID == (SOCKET)rivalID) myClients[tim].quyen_danh = 1;
+				}
+			}
+			else
+			{
+				// dang ky khong thanh cong-> chon phong khac
+				send(myClients[index].sockID, "RR_ER\n", 6, 0);
+			}
+
+
+
+		}
+		else if (!strcmp(cmd, "exit"))
+		{
+			// P_[ID]_[room]_[exit]
+
+			int LoseSockID = myClients[index].sockID;
+			int WinSockID = (myRoom[roomID]->A == LoseSockID) ? myRoom[roomID]->B : myRoom[roomID]->A;
+			send((SOCKET)WinSockID, "win exit\n", 9, 0);
+			myRoom[roomID]->displayMap();
+			myRoom[roomID]->saveLogxy(WinSockID);
+			myRoom[roomID]->reSet();
+		}
+		else if (myClients[index].quyen_danh == 1)
+		{
+			// P_[ID]_[room]_[x]_[y] hang thu x, cot thu y
+			char strx[5], stry[5];
+			int x, y, roomID;
+			sscanf(buf, "%s %s %s %s %s", P, nameID, rID, strx, stry);
+			x = atoi(strx);
+			y = atoi(stry);
+			roomID = atoi(rID);
+			cout << "\tRoom " << roomID << endl;
+			myRoom[roomID]->setMap(x, y, myClients[index].sockID);
+			myRoom[roomID]->displayMap();
+
+			int temp = myRoom[roomID]->whowin(x, y, myClients[index].sockID);
+
+
+			int rivalID = (myRoom[roomID]->A == (int)myClients[index].sockID) ? myRoom[roomID]->B : myRoom[roomID]->A;
+			for (int tim = 0; tim < numClient; tim++) {
+				if (myClients[tim].sockID == (SOCKET)rivalID) myClients[tim].quyen_danh = 1;
+			}
+			if (temp == (int)myClients[index].sockID)
+			{
+				// client[index] win
+				send(myClients[index].sockID, "win game\n", 9, 0);
+				send((SOCKET)rivalID, "lose\n", 5, 0);
+				myRoom[roomID]->saveLogxy(myClients[index].sockID);
+				myRoom[roomID]->reSet();
+				for (int tim = 0; tim < numClient; tim++) {
+					if (myClients[tim].sockID == (SOCKET)rivalID) myClients[tim].quyen_danh = -1;
+				}
+			}
+			else
+			{
+				char buf[256];
+				sprintf(buf, "play %s %d %d\n", nameID, x, y);
+				send((SOCKET)rivalID, buf, strlen(buf), 0);
+			}
+
+		}
+	}
+	else if (!strcmp(cmd, "C"))
+	{
+		char nameID[30], C[3], rID[5]; int dem = 0;
+		sscanf(buf, "%s %s %s", C, nameID, rID );
+		char *chat = buf;
+		while (chat[0]!='\n')  // tim ketqua chat
+		{
+			if (chat[0] == ' ') dem++;
+			if (dem == 3) {
+				chat += 1;
+				break;
+			}
+			chat += 1;
+		} 
+		printf("%s : %s",nameID,chat);
+		int roomID = atoi(rID);
+		int rivalID = (myRoom[roomID]->A == (int)myClients[index].sockID) ? myRoom[roomID]->B : myRoom[roomID]->A;
+		char buf1[256];
+		sprintf(buf1, "C %s %s", nameID, chat);
+		send((SOCKET)rivalID, buf1, strlen(buf1), 0);
+		char buf2[256];
+		sprintf(buf2, "C %s to  %s", nameID, chat);
+		myRoom[roomID]->saveLogChat(buf2);
+	}
+	else if (!strcmp(cmd, "exit")) {
+		Exit_program(index);
+		cout << "Exit: " << myClients[index].sockID << endl;
+	}
+}
+
+
+int main(int argc, char** argv)
+{
+	WSADATA wsa;
+	WSAStartup(MAKEWORD(2, 2), &wsa);
+
+	SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	SOCKADDR_IN add;
+	add.sin_family = AF_INET;
+	add.sin_addr.s_addr = htonl(ADDR_ANY);
+	add.sin_port = htons(9000);
+
+	bind(listener, (SOCKADDR *)&add, sizeof(add));
+	listen(listener, 5);
+
+
+	fd_set fdread;
+	int ret;
+	char buf[256];
+
+	// create room
+	for (int i = 0; i < 10; i++) {
+		myRoom[i] = new room();
+	}
+
+	while (1)
+	{
+		FD_ZERO(&fdread);
+		FD_SET(listener, &fdread);
+		for (int i = 0; i < numClient; i++)
+			FD_SET(myClients[i].sockID, &fdread);
+
+		ret = select(0, &fdread, NULL, NULL, NULL);
+
+		if (ret > 0)
+		{
+			if (FD_ISSET(listener, &fdread))
+			{
+				SOCKET client = accept(listener, NULL, NULL);
+				myClients[numClient].sockID = client;
+				myClients[numClient].roomID = -1;
+				myClients[numClient].quyen_danh = -1;
+				numClient++;
+				cout << "New Client: " << client << endl;
+				continue;
+			}
+			int index = 0;
+			for (index; index < numClient; index++)
+				if (FD_ISSET(myClients[index].sockID, &fdread))
+					break;
+			ret = recv(myClients[index].sockID, buf, sizeof(buf), 0);
+			if (ret <= 0)
+			{
+				// ngat ket noi
+				cout << "Exit: " << myClients[index].sockID << endl;
+				myClients[index].sockID = -1;
+			}
+			else {
+				buf[ret] = 0;
+				ProcessClient(index, buf);
+			}
+		}
+
+	}
+
+	closesocket(listener);
+	WSACleanup();
+	system("pause");
+
+	return 0;
+}
